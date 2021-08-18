@@ -16,17 +16,22 @@ package worker
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gardener/gardener/pkg/controllerutils"
 	"github.com/gardener/gardener/pkg/utils"
 	"github.com/gardener/gardener/pkg/utils/flow"
 	gutil "github.com/gardener/gardener/pkg/utils/gardener"
+	"github.com/gardener/gardener/pkg/utils/version"
 
+	"github.com/Masterminds/semver"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsscheme "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/scheme"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -37,7 +42,8 @@ const (
 )
 
 var (
-	machineCRDs              []*apiextensionsv1beta1.CustomResourceDefinition
+	machineCRDs115           []*apiextensionsv1beta1.CustomResourceDefinition
+	machineCRDs              []*apiextensionsv1.CustomResourceDefinition
 	apiextensionsScheme      = runtime.NewScheme()
 	deletionProtectionLabels = map[string]string{
 		gutil.DeletionProtected: "true",
@@ -45,14 +51,181 @@ var (
 )
 
 func init() {
-	agePrinterColumn := apiextensionsv1beta1.CustomResourceColumnDefinition{
+	agePrinterColumn := apiextensionsv1.CustomResourceColumnDefinition{
 		Name:        "Age",
 		Type:        "date",
 		Description: metav1.ObjectMeta{}.SwaggerDoc()["creationTimestamp"],
 		JSONPath:    ".metadata.creationTimestamp",
 	}
 
-	machineCRDs = []*apiextensionsv1beta1.CustomResourceDefinition{
+	machineCRDs = []*apiextensionsv1.CustomResourceDefinition{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "machinedeployments.machine.sapcloud.io",
+			},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: machineGroup,
+				Scope: apiextensionsv1.NamespaceScoped,
+				Names: apiextensionsv1.CustomResourceDefinitionNames{
+					Kind:       "MachineDeployment",
+					Plural:     "machinedeployments",
+					Singular:   "machinedeployment",
+					ShortNames: []string{"machdeploy"},
+				},
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{
+						Name: machineVersion,
+						Subresources: &apiextensionsv1.CustomResourceSubresources{
+							Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+						},
+						AdditionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
+							{
+								Name:        "Ready",
+								Type:        "integer",
+								Description: "Total number of ready machines targeted by this machine deployment.",
+								JSONPath:    ".status.readyReplicas",
+							},
+							{
+								Name:        "Desired",
+								Type:        "integer",
+								Description: "Number of desired machines.",
+								JSONPath:    ".spec.replicas",
+							},
+							{
+								Name:        "Up-to-date",
+								Type:        "integer",
+								Description: "Total number of non-terminated machines targeted by this machine deployment that have the desired template spec.",
+								JSONPath:    ".status.updatedReplicas",
+							},
+							{
+								Name:        "Available",
+								Type:        "integer",
+								Description: "Total number of available machines (ready for at least minReadySeconds) targeted by this machine deployment.",
+								JSONPath:    ".status.availableReplicas",
+							},
+							agePrinterColumn,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "machinesets.machine.sapcloud.io",
+			},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: machineGroup,
+				Scope: apiextensionsv1.NamespaceScoped,
+				Names: apiextensionsv1.CustomResourceDefinitionNames{
+					Kind:       "MachineSet",
+					Plural:     "machinesets",
+					Singular:   "machineset",
+					ShortNames: []string{"machset"},
+				},
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{
+						Name: machineVersion,
+						Subresources: &apiextensionsv1.CustomResourceSubresources{
+							Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+						},
+						AdditionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
+							{
+								Name:        "Desired",
+								Type:        "integer",
+								Description: "Number of desired replicas.",
+								JSONPath:    ".spec.replicas",
+							},
+							{
+								Name:        "Current",
+								Type:        "integer",
+								Description: "Number of actual replicas.",
+								JSONPath:    ".status.replicas",
+							},
+							{
+								Name:        "Ready",
+								Type:        "integer",
+								Description: "Number of ready replicas for this machine set.",
+								JSONPath:    ".status.readyReplicas",
+							},
+							agePrinterColumn,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "machines.machine.sapcloud.io",
+			},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: machineGroup,
+				Scope: apiextensionsv1.NamespaceScoped,
+				Names: apiextensionsv1.CustomResourceDefinitionNames{
+					Kind:       "Machine",
+					Plural:     "machines",
+					Singular:   "machine",
+					ShortNames: []string{"mach"},
+				},
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{
+						Name: machineVersion,
+						Subresources: &apiextensionsv1.CustomResourceSubresources{
+							Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+						},
+						AdditionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
+							{
+								Name:        "Status",
+								Type:        "string",
+								Description: "Current status of the machine.",
+								JSONPath:    ".status.currentStatus.phase",
+							},
+							agePrinterColumn,
+						},
+					},
+				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "machineclasses.machine.sapcloud.io",
+			},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: machineGroup,
+				Scope: apiextensionsv1.NamespaceScoped,
+				Names: apiextensionsv1.CustomResourceDefinitionNames{
+					Kind:       "MachineClass",
+					Plural:     "machineclasses",
+					Singular:   "machineclass",
+					ShortNames: []string{"machcls"},
+				},
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{
+						Name: machineVersion,
+						AdditionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
+							{
+								Name:        "Provider",
+								Type:        "string",
+								JSONPath:    ".provider",
+								Description: "Name of the provider which acts on the machine class object",
+							},
+							agePrinterColumn,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// TODO remove this as soon as the support for Kubernetes 1.15 has been dropped
+	agePrinterColumn115 := apiextensionsv1beta1.CustomResourceColumnDefinition{
+		Name:        "Age",
+		Type:        "date",
+		Description: metav1.ObjectMeta{}.SwaggerDoc()["creationTimestamp"],
+		JSONPath:    ".metadata.creationTimestamp",
+	}
+
+	// TODO remove this as soon as the support for Kubernetes 1.15 has been dropped
+	machineCRDs115 = []*apiextensionsv1beta1.CustomResourceDefinition{
 		{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "machinedeployments.machine.sapcloud.io",
@@ -95,7 +268,7 @@ func init() {
 						Description: "Total number of available machines (ready for at least minReadySeconds) targeted by this machine deployment.",
 						JSONPath:    ".status.availableReplicas",
 					},
-					agePrinterColumn,
+					agePrinterColumn115,
 				},
 			},
 		},
@@ -135,7 +308,7 @@ func init() {
 						Description: "Number of ready replicas for this machine set.",
 						JSONPath:    ".status.readyReplicas",
 					},
-					agePrinterColumn,
+					agePrinterColumn115,
 				},
 			},
 		},
@@ -163,7 +336,7 @@ func init() {
 						Description: "Current status of the machine.",
 						JSONPath:    ".status.currentStatus.phase",
 					},
-					agePrinterColumn,
+					agePrinterColumn115,
 				},
 			},
 		},
@@ -188,7 +361,7 @@ func init() {
 						JSONPath:    ".provider",
 						Description: "Name of the provider which acts on the machine class object",
 					},
-					agePrinterColumn,
+					agePrinterColumn115,
 				},
 			},
 		},
@@ -197,14 +370,14 @@ func init() {
 	type machineClass struct {
 		name                     string
 		kind                     string
-		additionalPrinterColumns []apiextensionsv1beta1.CustomResourceColumnDefinition
+		additionalPrinterColumns []apiextensionsv1.CustomResourceColumnDefinition
 	}
 
 	machineClasses := []machineClass{
 		{
 			name: "alicloud",
 			kind: "Alicloud",
-			additionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+			additionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
 				{
 					Name:     "Instance Type",
 					Type:     "string",
@@ -222,7 +395,7 @@ func init() {
 		{
 			name: "aws",
 			kind: "AWS",
-			additionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+			additionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
 				{
 					Name:     "Machine Type",
 					Type:     "string",
@@ -245,7 +418,7 @@ func init() {
 		{
 			name: "azure",
 			kind: "Azure",
-			additionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+			additionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
 				{
 					Name:     "VM Size",
 					Type:     "string",
@@ -263,7 +436,7 @@ func init() {
 		{
 			name: "gcp",
 			kind: "GCP",
-			additionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+			additionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
 				{
 					Name:     "Machine Type",
 					Type:     "string",
@@ -281,7 +454,7 @@ func init() {
 		{
 			name: "openstack",
 			kind: "OpenStack",
-			additionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+			additionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
 				{
 					Name:     "Flavor",
 					Type:     "string",
@@ -304,14 +477,27 @@ func init() {
 		{
 			name: "packet",
 			kind: "Packet",
-			additionalPrinterColumns: []apiextensionsv1beta1.CustomResourceColumnDefinition{
+			additionalPrinterColumns: []apiextensionsv1.CustomResourceColumnDefinition{
 				agePrinterColumn,
 			},
 		},
 	}
 
 	for _, current := range machineClasses {
-		machineCRDs = append(machineCRDs, &apiextensionsv1beta1.CustomResourceDefinition{
+		var printerColumns115 []apiextensionsv1beta1.CustomResourceColumnDefinition
+
+		for _, col := range current.additionalPrinterColumns {
+			printerColumns115 = append(printerColumns115, apiextensionsv1beta1.CustomResourceColumnDefinition{
+				Name:        col.Name,
+				Type:        col.Type,
+				Format:      col.Format,
+				Description: col.Description,
+				Priority:    col.Priority,
+				JSONPath:    col.JSONPath,
+			})
+		}
+
+		machineCRDs115 = append(machineCRDs115, &apiextensionsv1beta1.CustomResourceDefinition{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: current.name + "machineclasses.machine.sapcloud.io",
 			},
@@ -328,7 +514,32 @@ func init() {
 				Subresources: &apiextensionsv1beta1.CustomResourceSubresources{
 					Status: &apiextensionsv1beta1.CustomResourceSubresourceStatus{},
 				},
-				AdditionalPrinterColumns: current.additionalPrinterColumns,
+				AdditionalPrinterColumns: printerColumns115,
+			},
+		})
+
+		machineCRDs = append(machineCRDs, &apiextensionsv1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: current.name + "machineclasses.machine.sapcloud.io",
+			},
+			Spec: apiextensionsv1.CustomResourceDefinitionSpec{
+				Group: machineGroup,
+				Scope: apiextensionsv1.NamespaceScoped,
+				Names: apiextensionsv1.CustomResourceDefinitionNames{
+					Kind:       current.kind + "MachineClass",
+					Plural:     current.name + "machineclasses",
+					Singular:   current.name + "machineclass",
+					ShortNames: []string{current.name + "cls"},
+				},
+				Versions: []apiextensionsv1.CustomResourceDefinitionVersion{
+					{
+						Name: machineVersion,
+						Subresources: &apiextensionsv1.CustomResourceSubresources{
+							Status: &apiextensionsv1.CustomResourceSubresourceStatus{},
+						},
+						AdditionalPrinterColumns: current.additionalPrinterColumns,
+					},
+				},
 			},
 		})
 	}
@@ -343,15 +554,52 @@ func ApplyMachineResourcesForConfig(ctx context.Context, config *rest.Config) er
 		return err
 	}
 
-	return ApplyMachineResources(ctx, c)
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return err
+	}
+
+	version, err := discoveryClient.ServerVersion()
+	if err != nil {
+		return err
+	}
+
+	k8sVersion, err := semver.NewVersion(strings.Replace(version.GitCommit, "v", "", -1))
+	if err != nil {
+		return err
+	}
+
+	return ApplyMachineResources(ctx, c, k8sVersion)
 }
 
-// ApplyMachineResources ensures that all well-known machine CRDs are created or updated.
-func ApplyMachineResources(ctx context.Context, c client.Client) error {
+func applyMachineResourcesForKubernetes115(ctx context.Context, c client.Client) error {
+	fns := make([]flow.TaskFn, 0, len(machineCRDs115))
+
+	for _, crd := range machineCRDs115 {
+		obj := &apiextensionsv1beta1.CustomResourceDefinition{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: crd.Name,
+			},
+		}
+		spec := crd.Spec.DeepCopy()
+
+		fns = append(fns, func(ctx context.Context) error {
+			_, err := controllerutils.GetAndCreateOrMergePatch(ctx, c, obj, func() error {
+				obj.Labels = utils.MergeStringMaps(obj.Labels, deletionProtectionLabels)
+				obj.Spec = *spec
+				return nil
+			})
+			return err
+		})
+	}
+	return flow.Parallel(fns...)(ctx)
+}
+
+func applyMachineResources(ctx context.Context, c client.Client) error {
 	fns := make([]flow.TaskFn, 0, len(machineCRDs))
 
 	for _, crd := range machineCRDs {
-		obj := &apiextensionsv1beta1.CustomResourceDefinition{
+		obj := &apiextensionsv1.CustomResourceDefinition{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: crd.Name,
 			},
@@ -369,4 +617,13 @@ func ApplyMachineResources(ctx context.Context, c client.Client) error {
 	}
 
 	return flow.Parallel(fns...)(ctx)
+}
+
+// ApplyMachineResources ensures that all well-known machine CRDs are created or updated.
+func ApplyMachineResources(ctx context.Context, c client.Client, k8sVersion *semver.Version) error {
+	if version.VersionConstraintK8sLessEqual115.Check(k8sVersion) {
+		return applyMachineResourcesForKubernetes115(ctx, c)
+	}
+
+	return applyMachineResources(ctx, c)
 }
